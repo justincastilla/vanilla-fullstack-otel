@@ -213,11 +213,69 @@ document.querySelector('#button1').addEventListener('click', () => {
   emitSpan('user.clicked.#button1', '#button1');
 });
 
-// Debounce function to prevent flooding
+// Track slider interaction with start and end values
 let sliderTimeout;
+let sliderStartValue = null;
+
+// Capture initial value when interaction starts
+document.querySelector('#slider').addEventListener('mousedown', (e) => {
+  sliderStartValue = e.target.value;
+});
+
+document.querySelector('#slider').addEventListener('touchstart', (e) => {
+  sliderStartValue = e.target.value;
+});
+
+// Create span with rich attributes when interaction completes
 document.querySelector('#slider').addEventListener('change', (e) => {
-  const value = e.target.value;
-  emitSpan('user.adjusted.slider', value);
+  const endValue = parseInt(e.target.value);
+  const startValue = parseInt(sliderStartValue || endValue);
+  const delta = endValue - startValue;
+  const direction = delta > 0 ? 'increased' : delta < 0 ? 'decreased' : 'unchanged';
+
+  // Create a span with the slider as the action name
+  const span = tracer.startSpan('user.adjusted.slider');
+
+  context.with(trace.setSpan(context.active(), span), () => {
+    span.setAttribute('slider.start.value', startValue);
+    span.setAttribute('slider.end.value', endValue);
+    span.setAttribute('slider.delta', delta);
+    span.setAttribute('slider.direction', direction);
+    span.setAttribute('slider.magnitude', Math.abs(delta));
+
+    // Add context about the adjustment
+    let adjustmentType;
+    if (Math.abs(delta) >= 5) {
+      adjustmentType = 'large';
+      span.setAttribute('slider.adjustment', 'large');
+    } else if (Math.abs(delta) >= 2) {
+      adjustmentType = 'medium';
+      span.setAttribute('slider.adjustment', 'medium');
+    } else if (delta !== 0) {
+      adjustmentType = 'small';
+      span.setAttribute('slider.adjustment', 'small');
+    } else {
+      adjustmentType = 'none';
+      span.setAttribute('slider.adjustment', 'none');
+    }
+
+    console.log(`Slider adjusted from ${startValue} to ${endValue} (${direction} by ${Math.abs(delta)})`);
+
+    // Log to UI
+    const spanContext = span.spanContext();
+    logToUI('user.adjusted.slider', spanContext, 'interaction', {
+      'Start': startValue,
+      'End': endValue,
+      'Delta': delta > 0 ? `+${delta}` : delta,
+      'Direction': direction,
+      'Adjustment': adjustmentType
+    });
+
+    span.end();
+  });
+
+  // Reset for next interaction
+  sliderStartValue = endValue;
 });
 
 // Visual feedback only (no span creation) for input events
@@ -227,10 +285,13 @@ document.querySelector('#slider').addEventListener('input', (e) => {
 
   // Only log to UI, don't create spans (prevents queue overflow)
   sliderTimeout = setTimeout(() => {
-    logToUI('Slider Value Changed', { traceId: 'UI-ONLY', spanId: 'NO-SPAN' }, 'interaction', {
-      'Element': '#slider',
-      'Value': value,
-      'Note': 'UI feedback only - span created on release'
+    const startVal = sliderStartValue || value;
+    const delta = parseInt(value) - parseInt(startVal);
+    logToUI('Slider Dragging', { traceId: 'UI-ONLY', spanId: 'NO-SPAN' }, 'interaction', {
+      'Current Value': value,
+      'Start Value': startVal,
+      'Delta': delta !== 0 ? (delta > 0 ? `+${delta}` : delta) : '0',
+      'Note': 'Span created on release'
     });
   }, 300); // Debounce by 300ms
 });
