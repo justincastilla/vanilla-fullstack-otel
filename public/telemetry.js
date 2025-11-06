@@ -20,8 +20,8 @@ import { DocumentLoadInstrumentation } from '@opentelemetry/instrumentation-docu
 import { ZoneContextManager } from '@opentelemetry/context-zone';
 
 /* Packages for exporting traces */
-// SimpleSpanProcessor immediately forwards completed spans to the exporter
-import { SimpleSpanProcessor } from '@opentelemetry/sdk-trace-base';
+// BatchSpanProcessor batches spans together before sending (better for production)
+import { BatchSpanProcessor } from '@opentelemetry/sdk-trace-base';
 
 // Import the OTLP HTTP exporter for sending traces to the collector over HTTP
 import { OTLPTraceExporter } from '@opentelemetry/exporter-trace-otlp-http';
@@ -41,13 +41,16 @@ export function initTelemetry() {
   });
 
   provider.addSpanProcessor(
-    new SimpleSpanProcessor(
+    new BatchSpanProcessor(
       new OTLPTraceExporter({
-        url: 'http://localhost:8123/v1/traces',
-        fetchOptions: {
-          credentials: 'include',
-        },
-      })
+        url: 'http://localhost:4318/v1/traces',
+      }),
+      {
+        // Batch config to prevent overwhelming the collector
+        maxQueueSize: 2048,
+        maxExportBatchSize: 512,
+        scheduledDelayMillis: 1000, // Send every 1 second
+      }
     )
   );
 

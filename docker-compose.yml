@@ -11,13 +11,19 @@ services:
       - ELASTIC_TOKEN=${ELASTIC_TOKEN}
     command: ["--config=/etc/otelcol/config.yaml", "--set=service.telemetry.logs.level=debug"]
 
-  nginx:
+  frontend:
     build:
-      context: ./nginx
-    image: nginx:latest
+      context: .
+      dockerfile: Dockerfile.frontend
     ports:
-      - "8123:8123"
+      - "1234:1234"
     volumes:
-      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./public:/app/public
+      - ./package.json:/app/package.json
+      - ./package-lock.json:/app/package-lock.json
+    env_file:
+      - .env
+    environment:
+      - WEATHER_API_KEY=${WEATHER_API_KEY}
     depends_on:
       - otel-collector

@@ -6,15 +6,76 @@ import { initTelemetry } from './telemetry.js';
 initTelemetry();
 
 const tracer = trace.getTracer('vanilla-frontend');
-const weatherApiKey = process.env.WEATHER_API_KEY;
+const weatherApiKey = "3af404b5e7b34adcb45202556251704";
+
+// Logging utility for UI
+const logToUI = (spanName, spanContext, type = 'manual', details = {}) => {
+  const logOutput = document.querySelector('#logOutput');
+  const timestamp = new Date().toISOString();
+  const traceId = spanContext?.traceId || 'N/A';
+  const spanId = spanContext?.spanId || 'N/A';
+
+  const logEntry = document.createElement('div');
+  logEntry.className = `log-entry ${type}`;
+
+  let detailsHTML = '';
+  for (const [key, value] of Object.entries(details)) {
+    detailsHTML += `<div class="log-detail"><span>${key}:</span> ${value}</div>`;
+  }
+
+  logEntry.innerHTML = `
+    <div class="log-time">${timestamp}</div>
+    <span class="log-type ${type}">${type}</span>
+    <div class="log-detail"><span>Span:</span> ${spanName}</div>
+    <div class="log-detail"><span>Trace ID:</span> <span class="log-trace-id">${traceId}</span></div>
+    <div class="log-detail"><span>Span ID:</span> <span class="log-span-id">${spanId}</span></div>
+    ${detailsHTML}
+  `;
+
+  // Insert at the top
+  logOutput.insertBefore(logEntry, logOutput.firstChild);
+
+  // Auto-scroll to top
+  logOutput.scrollTop = 0;
+};
+
+// Clear logs button and initialize log
+document.addEventListener('DOMContentLoaded', () => {
+  const logOutput = document.querySelector('#logOutput');
+
+  // Add initial message
+  logOutput.innerHTML = `
+    <div class="log-entry" style="border-left-color: #4fc3f7;">
+      <div class="log-time">${new Date().toISOString()}</div>
+      <span class="log-type" style="background: #4fc3f7;">READY</span>
+      <div class="log-detail"><span>Status:</span> Telemetry logging initialized</div>
+      <div class="log-detail"><span>Info:</span> Interact with the buttons above to see trace data appear here</div>
+    </div>
+  `;
+
+  document.querySelector('#clearLogs')?.addEventListener('click', () => {
+    logOutput.innerHTML = '';
+  });
+});
 
 
 const getDataCascade = () => {
-  getData1('https://httpbin.org/get').then(() => {
-    getData2('https://httpbin.org/get').then(() => {
+  // Log the cascade start
+  const activeSpan = trace.getSpan(context.active());
+  if (activeSpan) {
+    const spanContext = activeSpan.spanContext();
+    logToUI('API Cascade Started', spanContext, 'fetch', {
+      'Requests': '3 cascading requests',
+      'Endpoint': 'jsonplaceholder.typicode.com',
+      'Type': 'XMLHttpRequest + Fetch'
+    });
+  }
+
+  getData1('https://jsonplaceholder.typicode.com/posts/1').then(() => {
+    getData2('https://jsonplaceholder.typicode.com/users/1').then(() => {
       console.log('data downloaded 2');
     });
-    getData1('https://httpbin.org/get').then(() => {
+    getData1('https://jsonplaceholder.typicode.com/todos/1').then(() => {
       console.log('data downloaded 3');
     });
     console.log('data downloaded 1');
@@ -64,6 +125,15 @@ const emitSpan = (action, value) => {
       span.setAttribute('value', value);
     }
     console.log(`Manual span '${action}' emitted`);
+
+    // Log to UI
+    const spanContext = span.spanContext();
+    logToUI(action, spanContext, 'manual', {
+      'Action': action,
+      'Value': value || 'N/A',
+      'Status': 'Batched (sent every 1s)'
+    });
+
     subFunction(action);
     span.end();
   });
@@ -77,6 +147,15 @@ const subFunction = (action) => {
   context.with(trace.setSpan(context.active(), span), () => {
     span.setAttribute('sub.key', 'subvalue');
     span.setAttribute('result', 1);
+
+    // Log to UI
+    const spanContext = span.spanContext();
+    logToUI(`${action}.subfunction`, spanContext, 'manual', {
+      'Parent Action': action,
+      'Result': '1',
+      'Type': 'Child span'
+    });
+
     span.end();
   });
   // this return value will show up in the span as a result numeric_label type
@@ -88,26 +167,36 @@ const renderWeather = (data) => {
 
   const { location, current } = data;
   const { name, region, country }  = location;
-  const { temp_f } = current;
+  const { temp_f, condition } = current;
 
   weatherContainer.innerHTML = `
-    <h2>Weather in ${name}, ${region}, ${country}</h2>
-    <p>Temperature: ${temp_f}°F</p>`
-  
+    <h2>${name}, ${region}, ${country}</h2>
+    <p>Temperature: ${temp_f}°F</p>
+    <p>Conditions: ${condition.text}</p>`
+
   weatherContainer.style.display = 'block';
 
   return weatherContainer;
 }
-      
+
 const getWeather = async (input) => {
   let weatherEndpoint = `http://api.weatherapi.com/v1/current.json?key=${weatherApiKey}&q=${input || 98366}&aqi=yes`;
   try {
+      // Log the fetch start
+      const activeSpan = trace.getSpan(context.active());
+      if (activeSpan) {
+        const spanContext = activeSpan.spanContext();
+        logToUI('Weather API Fetch', spanContext, 'fetch', {
+          'URL': weatherEndpoint.split('?')[0],
+          'City': input || '98366',
+          'Method': 'GET'
+        });
+      }
+
       const response = await fetch(weatherEndpoint);
       const cloneForApp = response.clone();
       const data = await cloneForApp.json();
-      const weatherContainer = renderWeather(data);
-      const checkWeatherButton = document.querySelector('#getWeather');
-      checkWeatherButton.insertAdjacentElement('afterend', weatherContainer);
+      renderWeather(data);
 
       return response;
     } catch (e) {
@@ -124,8 +213,26 @@ document.querySelector('#button1').addEventListener('click', () => {
   emitSpan('user.clicked.#button1', '#button1');
 });
 
-document.querySelector('#slider').addEventListener('click', () => {
-  emitSpan('user.clicked.slider', 'slider');
+// Debounce function to prevent flooding
+let sliderTimeout;
+document.querySelector('#slider').addEventListener('change', (e) => {
+  const value = e.target.value;
+  emitSpan('user.adjusted.slider', value);
+});
+
+// Visual feedback only (no span creation) for input events
+document.querySelector('#slider').addEventListener('input', (e) => {
+  const value = e.target.value;
+  clearTimeout(sliderTimeout);
+
+  // Only log to UI, don't create spans (prevents queue overflow)
+  sliderTimeout = setTimeout(() => {
+    logToUI('Slider Value Changed', { traceId: 'UI-ONLY', spanId: 'NO-SPAN' }, 'interaction', {
+      'Element': '#slider',
+      'Value': value,
+      'Note': 'UI feedback only - span created on release'
+    });
+  }, 300); // Debounce by 300ms
 });
 
 document.querySelector('#button2').addEventListener('click', () => {

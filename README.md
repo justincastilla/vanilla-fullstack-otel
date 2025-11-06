@@ -2,7 +2,17 @@
 
 This project demonstrates a minimal, framework-agnostic example of capturing browser telemetry using OpenTelemetry and sending it to Elastic Observability. It walks through a progression from manual instrumentation, to automatic instrumentation, and a final hybrid approach, showing each step in action. Accompanying slides may be found [here](slides/Linuxfest%20Northwest%20-%20Observability%20is%20for%20Frontend,%20Too!.pdf).
 
+## Why This Architecture?
 
+This demo uses a **simplified two-service architecture** designed for learning:
+
+- ✅ **Browser → OTel Collector → Elastic** - Clear, linear data flow
+- ✅ **Vendor-neutral** - Uses OTLP standard, works with any OTLP-compatible backend
+- ✅ **Minimal infrastructure** - Just Docker Compose with 2 services
+- ✅ **Production patterns** - BatchSpanProcessor, context propagation, CORS handling
+- ✅ **Focus on code** - Less infrastructure complexity, more instrumentation examples
+
+The OpenTelemetry Collector handles CORS directly (no reverse proxy needed), making this setup easy to understand and reproduce while still demonstrating production-ready patterns.
 
 ## 1. Installation
 
@@ -23,7 +33,7 @@ You will need credentials for Elastic APM to send telemetry data. Here's how:
 2. Create or select an existing deployment optimized for Observability.
 3. Navigate to **Observability > APM** and note the following:
    - APM Server URL (e.g., `https://<your-deployment>.apm.us-central1.gcp.elastic-cloud.com`)
-   - API Key for sending data securely (e.g., `<Bearer your-token here>`)
+   - API Key for sending data securely
 4. Create a `.env` file in your root directory and copy from `.env.example`:
 
 ```bash
@@ -32,40 +42,45 @@ cp .env.example .env
 
 Then fill in the values:
 ```bash
-ELASTIC_APM_ENDPOINT='https://<your-deployment>.apm.us-central1.gcp.elastic-cloud.com'
-ELASTIC_ENDPOINT='Bearer your-token here'
+ELASTIC_ENDPOINT='https://<your-deployment>.apm.us-central1.gcp.elastic-cloud.com'
+ELASTIC_TOKEN='ApiKey your-token-here'
+WEATHER_API_KEY='your-weather-api-key-here'
 ```
+
+**Important**: The `ELASTIC_TOKEN` must be in the format `ApiKey <your-token>`, not `Bearer <your-token>`.
 
 
 
 ## 3. Breakdown of components
 
-### Parcel
-Parcel is a fast, zero-config bundler that compiles and serves the frontend JavaScript (like app.js) and HTML (like index.html). It ensures that modern JavaScript syntax works across browsers.
+### Parcel (Frontend Dev Server)
+Parcel is a fast, zero-config bundler that compiles and serves the frontend JavaScript (like app.js) and HTML (like index.html). It ensures that modern JavaScript syntax works across browsers and provides hot module reloading.
 
-### NGINX
-NGINX acts as a reverse proxy server. In this setup, it forwards OpenTelemetry data from the browser to the OpenTelemetry Collector. This solves CORS issues by having a server-side relay.
+### OpenTelemetry SDK
+The frontend uses the OpenTelemetry Web SDK with `BatchSpanProcessor` to batch telemetry spans together before sending them to the collector every 1 second. This prevents overwhelming the collector's queue with individual span exports.
 
 ### OpenTelemetry Collector
-The OTEL Collector receives telemetry data from the browser, optionally processes or transforms it, and then exports it to Elastic APM using the OTLP exporter. It decouples instrumentation from backend observability systems.
+The OTEL Collector receives telemetry data directly from the browser via HTTP on port 4318. It has CORS enabled to accept requests from localhost:1234. The collector then exports traces to Elastic APM using the OTLP exporter. This architecture:
+- Uses the vendor-neutral OTLP standard
+- Decouples browser instrumentation from the observability backend
+- Allows for data processing/filtering before export
+- Demonstrates production-ready patterns in a simple setup
 
 
 ## 4. Running the Project & Viewing Examples
 
-Ensure your docker container service is started. Run the NGINX reverse proxy server and the OTel Elastic Collector using Docker Compose:
+Ensure your docker container service is started. Run all services using Docker Compose:
 ```bash
 docker-compose up
 ```
 
-Open a new tab in your terminal to run the Parcel server:
+This single command starts:
+- Frontend Parcel dev server on port 1234
+- OpenTelemetry Collector on port 4318 (with CORS enabled)
 
-```bash
-npm run dev
-```
+The application serves `index.html` and bundles `app.js`, which contains various buttons and inputs that emit OpenTelemetry spans based on different types of instrumentation.
 
-This will serve `index.html` bundle your `app.js`, which contains various buttons and inputs that emit OpenTelemetry spans based on different types of instrumentation.
-
-Open the browser to `localhost:1234` and open the devtools to the Console view. You will see information appear in when button clicks occur. You can also check the network tab to view traces being sent out with their payloads.
+Open the browser to `http://localhost:1234` and interact with the UI elements. The telemetry log on the right side shows real-time trace and span information as you click buttons, adjust the slider, or fetch weather data. You can also check the browser devtools Network tab to view traces being sent to the collector.
 
 
 ## 5. Exploring Manual and Automatic Instrumentation Progression

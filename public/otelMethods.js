@@ -8,12 +8,21 @@ export const automaticSpanMethod = async (span, request, result) => {
       // Parse the URL and extract the "q" parameter
       const parsedUrl = new URL(url);
       const queryParam = parsedUrl.searchParams.get('q');
+
       if (parsedUrl.host == 'api.weatherapi.com') {
         span.updateName('automatic-weather-api');
-      } else if (parsedUrl.host == 'httpbin.org') {
-        span.updateName('automatic-httpbin');
-      } 
-      
+      } else if (parsedUrl.host == 'jsonplaceholder.typicode.com') {
+        span.updateName('automatic-jsonplaceholder-api');
+        // Extract resource type from path (posts, users, todos, etc.)
+        const pathParts = parsedUrl.pathname.split('/').filter(Boolean);
+        if (pathParts.length > 0) {
+          span.setAttribute('api.resource', pathParts[0]);
+          if (pathParts.length > 1) {
+            span.setAttribute('api.resourceId', pathParts[1]);
+          }
+        }
+      }
+
       if (queryParam) {
         span.setAttribute('user.input.queryParameters', queryParam);
       }
