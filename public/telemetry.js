@@ -32,11 +32,16 @@ import { Resource } from '@opentelemetry/resources';
 // Provides standard semantic keys for attributes, like service.name
 import { SemanticResourceAttributes } from '@opentelemetry/semantic-conventions';
 
+// Propagators for distributed tracing (sends trace context to backend)
+import { W3CTraceContextPropagator } from '@opentelemetry/core';
+import { CompositePropagator } from '@opentelemetry/core';
+
 
 export function initTelemetry() {
   const provider = new WebTracerProvider({
     resource: new Resource({
       [SemanticResourceAttributes.SERVICE_NAME]: 'vanilla-frontend',
+      [SemanticResourceAttributes.DEPLOYMENT_ENVIRONMENT]: 'development',
     }),
   });
 
@@ -54,16 +59,47 @@ export function initTelemetry() {
     )
   );
 
+  // Register with context manager AND propagator for distributed tracing
   provider.register({
     contextManager: new ZoneContextManager(),
+    propagator: new CompositePropagator({
+      propagators: [new W3CTraceContextPropagator()],
+    }),
   });
+
+  // Custom method to rename click spans based on element
+  const customizeClickSpan = (span, element) => {
+    // Update span name based on which element was clicked
+    if (element.id === 'getWeather') {
+      span.updateName('weather-button-click');
+      span.setAttribute('button.type', 'weather-api');
+      span.setAttribute('button.label', element.textContent);
+    } else if (element.id === 'button1') {
+      span.updateName('manual-span-button-click');
+      span.setAttribute('button.type', 'manual-instrumentation');
+      span.setAttribute('button.label', element.textContent);
+    } else if (element.id === 'button2') {
+      span.updateName('api-simulation-button-click');
+      span.setAttribute('button.type', 'api-cascade');
+      span.setAttribute('button.label', element.textContent);
+    } else if (element.id === 'clearLogs') {
+      span.updateName('clear-logs-button-click');
+      span.setAttribute('button.type', 'utility');
+    }
+  };
 
   const autoInstSettings = {
     '@opentelemetry/instrumentation-fetch': {
-      applyCustomAttributesOnSpan: automaticSpanMethod
+      applyCustomAttributesOnSpan: automaticSpanMethod,
+      // Propagate trace headers to backend (required for distributed tracing)
+      propagateTraceHeaderCorsUrls: [
+        /localhost:8000/,  // Backend service
+        /http:\/\/localhost:8000\/.*/,  // Regex pattern for backend
+      ]
     },
     '@opentelemetry/instrumentation-user-interaction': {
       "events": ['click'],
+      applyCustomAttributesOnSpan: customizeClickSpan
     },
   }
 

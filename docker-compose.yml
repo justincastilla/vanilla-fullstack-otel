@@ -11,6 +11,20 @@ services:
       - ELASTIC_TOKEN=${ELASTIC_TOKEN}
     command: ["--config=/etc/otelcol/config.yaml", "--set=service.telemetry.logs.level=debug"]
 
+  backend:
+    build:
+      context: ./backend
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    environment:
+      - ELASTICSEARCH_ENDPOINT=${ELASTICSEARCH_ENDPOINT}
+      - ELASTICSEARCH_API=${ELASTICSEARCH_API}
+      - CACHE_INDEX=${CACHE_INDEX}
+    depends_on:
+      - otel-collector
+
   frontend:
     build:
       context: .
@@ -25,5 +39,7 @@ services:
       - .env
     environment:
       - WEATHER_API_KEY=${WEATHER_API_KEY}
+      - BACKEND_URL=http://localhost:8000
     depends_on:
       - otel-collector
+      - backend

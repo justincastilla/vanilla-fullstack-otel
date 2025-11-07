@@ -1,63 +1,125 @@
-// Context and trace are used to manage the current context and create spans
+/**
+ * OpenTelemetry Frontend Demo Application
+ *
+ * This file demonstrates various OpenTelemetry instrumentation patterns:
+ * - Automatic instrumentation (fetch, XMLHttpRequest)
+ * - Manual span creation with custom attributes
+ * - Distributed tracing (browser → backend → Elasticsearch)
+ * - Cache-first pattern with observability
+ * - User interaction tracking (clicks, slider)
+ * - Parent-child span relationships
+ */
+
+// OpenTelemetry imports
 import { context, trace } from '@opentelemetry/api';
-// Import telemetry initilization function
 import { initTelemetry } from './telemetry.js';
 
+// UI utilities
+import { log, logToUI, initLogPanel } from './utility.js';
+
 initTelemetry();
+initLogPanel();
 
 const tracer = trace.getTracer('vanilla-frontend');
-const weatherApiKey = "3af404b5e7b34adcb45202556251704";
+const weatherApiKey = process.env.WEATHER_API_KEY;
 
-// Logging utility for UI
-const logToUI = (spanName, spanContext, type = 'manual', details = {}) => {
-  const logOutput = document.querySelector('#logOutput');
-  const timestamp = new Date().toISOString();
-  const traceId = spanContext?.traceId || 'N/A';
-  const spanId = spanContext?.spanId || 'N/A';
+// Backend URL for caching
+const backendUrl = process.env.BACKEND_URL || 'http://localhost:8000';
 
-  const logEntry = document.createElement('div');
-  logEntry.className = `log-entry ${type}`;
+// Cache utility functions with instrumentation
+const checkWeatherCache = async (cityKey) => {
+  const span = tracer.startSpan('cache.check.backend');
 
-  let detailsHTML = '';
-  for (const [key, value] of Object.entries(details)) {
-    detailsHTML += `<div class="log-detail"><span>${key}:</span> ${value}</div>`;
-  }
+  return await context.with(trace.setSpan(context.active(), span), async () => {
+    span.setAttribute('cache.operation', 'read');
+    span.setAttribute('cache.key', cityKey);
+    span.setAttribute('cache.backend', 'fastapi');
 
-  logEntry.innerHTML = `
-    <div class="log-time">${timestamp}</div>
-    <span class="log-type ${type}">${type}</span>
-    <div class="log-detail"><span>Span:</span> ${spanName}</div>
-    <div class="log-detail"><span>Trace ID:</span> <span class="log-trace-id">${traceId}</span></div>
-    <div class="log-detail"><span>Span ID:</span> <span class="log-span-id">${spanId}</span></div>
-    ${detailsHTML}
-  `;
+    try {
+      const url = `${backendUrl}/api/cache/check?city=${encodeURIComponent(cityKey)}`;
 
-  // Insert at the top
-  logOutput.insertBefore(logEntry, logOutput.firstChild);
+      const response = await fetch(url, {
+        method: 'GET',
+        headers: {
+          'Content-Type': 'application/json'
+        }
+      });
 
-  // Auto-scroll to top
-  logOutput.scrollTop = 0;
+      if (response.ok) {
+        const result = await response.json();
+
+        span.setAttribute('cache.hit', result.cached);
+
+        if (result.cached) {
+          span.setAttribute('cache.age_seconds', result.age_seconds);
+          log(`Cache hit for ${cityKey}`, 'success', { 'Age': `${result.age_seconds}s` });
+          span.end();
+          return result.data;
+        } else {
+          span.setAttribute('cache.miss_reason', result.reason || 'unknown');
+          log(`Cache miss for ${cityKey}`, 'info', { 'Reason': result.reason || 'unknown' });
+          span.end();
+          return null;
+        }
+      } else {
+        span.setAttribute('cache.hit', false);
+        span.setAttribute('cache.miss_reason', 'backend_error');
+        log(`Cache backend error for ${cityKey}`, 'error', { 'Status': response.status });
+        span.end();
+        return null;
+      }
+    } catch (error) {
+      span.setAttribute('cache.hit', false);
+      span.setAttribute('cache.error', error.message);
+      span.recordException(error);
+      span.end();
+      log('Cache check error', 'error', { 'Error': error.message });
+      return null;
+    }
+  });
 };
 
-// Clear logs button and initialize log
-document.addEventListener('DOMContentLoaded', () => {
-  const logOutput = document.querySelector('#logOutput');
+const cacheWeatherData = async (cityKey, weatherData) => {
+  const span = tracer.startSpan('cache.write.backend');
 
-  // Add initial message
-  logOutput.innerHTML = `
-    <div class="log-entry" style="border-left-color: #4fc3f7;">
-      <div class="log-time">${new Date().toISOString()}</div>
-      <span class="log-type" style="background: #4fc3f7;">READY</span>
-      <div class="log-detail"><span>Status:</span> Telemetry logging initialized</div>
-      <div class="log-detail"><span>Info:</span> Interact with the buttons above to see trace data appear here</div>
-    </div>
-  `;
+  return await context.with(trace.setSpan(context.active(), span), async () => {
+    span.setAttribute('cache.operation', 'write');
+    span.setAttribute('cache.key', cityKey);
+    span.setAttribute('cache.backend', 'fastapi');
 
-  document.querySelector('#clearLogs')?.addEventListener('click', () => {
-    logOutput.innerHTML = '';
+    try {
+      const url = `${backendUrl}/api/cache/write`;
+
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          city: cityKey,
+          weather_data: weatherData
+        })
+      });
+
+      if (response.ok) {
+        span.setAttribute('cache.write.success', true);
+        log(`Cached weather data for ${cityKey}`, 'success');
+      } else {
+        span.setAttribute('cache.write.success', false);
+        span.setAttribute('cache.write.status', response.status);
+        log('Cache write failed', 'error', { 'Status': response.status, 'City': cityKey });
+      }
+
+      span.end();
+    } catch (error) {
+      span.setAttribute('cache.write.success', false);
+      span.setAttribute('cache.error', error.message);
+      span.recordException(error);
+      span.end();
+      log('Cache write error', 'error', { 'Error': error.message, 'City': cityKey });
+    }
   });
-});
-
+};
 
 const getDataCascade = () => {
   // Log the cascade start
@@ -73,12 +135,12 @@ const getDataCascade = () => {
 
   getData1('https://jsonplaceholder.typicode.com/posts/1').then(() => {
     getData2('https://jsonplaceholder.typicode.com/users/1').then(() => {
-      console.log('data downloaded 2');
+      log('API cascade: request 2 completed', 'info', { 'Endpoint': 'users/1' });
     });
     getData1('https://jsonplaceholder.typicode.com/todos/1').then(() => {
-      console.log('data downloaded 3');
+      log('API cascade: request 3 completed', 'info', { 'Endpoint': 'todos/1' });
     });
-    console.log('data downloaded 1');
+    log('API cascade: request 1 completed', 'info', { 'Endpoint': 'posts/1' });
   });
 }
 
@@ -107,7 +169,7 @@ const getData2 = async (url) => {
     });
     return response;
   } catch (error) {
-    console.error('Error in getData:', error);
+    log('Error in getData2', 'error', { 'Error': error.message, 'URL': url });
   }
 }
 
@@ -124,7 +186,6 @@ const emitSpan = (action, value) => {
     if (value !== undefined) {
       span.setAttribute('value', value);
     }
-    console.log(`Manual span '${action}' emitted`);
 
     // Log to UI
     const spanContext = span.spanContext();
@@ -180,29 +241,67 @@ const renderWeather = (data) => {
 }
 
 const getWeather = async (input) => {
-  let weatherEndpoint = `http://api.weatherapi.com/v1/current.json?key=${weatherApiKey}&q=${input || 98366}&aqi=yes`;
-  try {
-      // Log the fetch start
-      const activeSpan = trace.getSpan(context.active());
-      if (activeSpan) {
-        const spanContext = activeSpan.spanContext();
-        logToUI('Weather API Fetch', spanContext, 'fetch', {
+  const cityKey = input || '98366';
+  const parentSpan = tracer.startSpan('getWeather');
+
+  return await context.with(trace.setSpan(context.active(), parentSpan), async () => {
+    parentSpan.setAttribute('weather.city', cityKey);
+    parentSpan.setAttribute('weather.has_cache', true);
+
+    try {
+      // Step 1: Check cache via backend
+      let weatherData = null;
+      let cacheHit = false;
+
+      weatherData = await checkWeatherCache(cityKey);
+      cacheHit = !!weatherData;
+      parentSpan.setAttribute('cache.used', true);
+      parentSpan.setAttribute('cache.hit', cacheHit);
+
+      // Step 2: If cache miss, fetch from API
+      if (!weatherData) {
+        const weatherEndpoint = `https://api.weatherapi.com/v1/current.json?key=${weatherApiKey}&q=${cityKey}&aqi=yes`;
+
+        logToUI('Weather API Fetch', parentSpan.spanContext(), 'fetch', {
           'URL': weatherEndpoint.split('?')[0],
-          'City': input || '98366',
+          'City': cityKey,
+          'Cache': cacheHit ? 'Hit' : 'Miss',
           'Method': 'GET'
+        });
+
+        const response = await fetch(weatherEndpoint);
+        const cloneForApp = response.clone();
+        weatherData = await cloneForApp.json();
+
+        parentSpan.setAttribute('weather.api_called', true);
+
+        // Step 3: Store in cache via backend
+        await cacheWeatherData(cityKey, weatherData);
+        parentSpan.setAttribute('cache.wrote', true);
+      } else {
+        parentSpan.setAttribute('weather.api_called', false);
+        parentSpan.setAttribute('weather.source', 'cache');
+
+        logToUI('Weather Cache Hit', parentSpan.spanContext(), 'fetch', {
+          'City': cityKey,
+          'Source': 'Backend Cache',
+          'API Call': 'Skipped'
         });
       }
 
-      const response = await fetch(weatherEndpoint);
-      const cloneForApp = response.clone();
-      const data = await cloneForApp.json();
-      renderWeather(data);
+      // Render the weather data
+      renderWeather(weatherData);
 
-      return response;
+      parentSpan.end();
+      return weatherData;
     } catch (e) {
-      console.error('Error fetching weather data:', e);
+      parentSpan.recordException(e);
+      parentSpan.setAttribute('error', true);
+      parentSpan.end();
+      log('Error fetching weather data', 'error', { 'Error': e.message });
     }
-  }
+  });
+}
   
 document.querySelector('#getWeather').addEventListener('click', () => {
   const input = document.querySelector('#weatherInput').value;
@@ -258,8 +357,6 @@ document.querySelector('#slider').addEventListener('change', (e) => {
       adjustmentType = 'none';
       span.setAttribute('slider.adjustment', 'none');
     }
-
-    console.log(`Slider adjusted from ${startValue} to ${endValue} (${direction} by ${Math.abs(delta)})`);
 
     // Log to UI
     const spanContext = span.spanContext();
